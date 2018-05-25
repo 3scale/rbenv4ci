@@ -1,0 +1,149 @@
+#!/bin/bash
+
+source ~/.bash_rbenv
+
+_rb_find_up_first() {
+  local path="${1}"
+  local found
+
+  while true; do
+    path="$(readlink -f "${path}")"
+    found="$(find "${path}" -maxdepth 1 -mindepth 1 "${@:2}")"
+    if test "x${found}" != "x"; then
+      echo "${found}"
+      break
+    else
+      if test "x${path}" = "x/"; then
+        break
+      fi
+      path="${path}"/..
+    fi
+  done
+}
+
+_rb_bundle_find_lockfile() {
+  local gemfile="${1:-${BUNDLE_GEMFILE}}"
+
+  if test "x${gemfile}" = "x"; then
+    gemfile="$(_rb_find_up_first . -xtype f -name "Gemfile")"
+  fi
+
+  lockfile="${gemfile}.lock"
+
+  if test "x${lockfile}" != "x.lock" -a -r "${lockfile}"; then
+    echo "${lockfile}"
+  fi
+}
+
+_rb_bundle_cmd() {
+  local version="${1:-}"
+  if test "x${version}" = "xcurrent"; then
+    version=
+  fi
+  local version_spec="${version:+_${version}_}"
+  echo "bundle ${version_spec}"
+}
+
+_rb_bundled_with() {
+  lockfile="$(_rb_bundle_find_lockfile "${1}")"
+
+  if test "x${lockfile}" != "x"; then
+    cat "${lockfile}" 2> /dev/null | grep -A 1 "^BUNDLED WITH$" | tail -n 1 | sed -e 's/\s//g'
+  fi
+}
+
+_rb_eval() {
+  eval "${@}"
+}
+
+rb_bundle() {
+  _rb_eval "$(_rb_bundle_cmd "$(_rb_bundled_with)") "${@}""
+}
+
+rb_bundle_exec() {
+  rb_bundle exec "${@}"
+}
+
+rb_with_bundler_do() {
+  local version="${1}"
+  _rb_eval "$(_rb_bundle_cmd "${version}") "${@:2}""
+}
+
+_rb_get_bundler_version() {
+  local version="${1:-current}"
+  local version_s="$(rb_with_bundler_do "${version}" --version 2> /dev/null | sed -e 's/.*\sversion\s\([0-9a-zA-Z\.-_]*\)/\1/g')"
+
+  echo "${version_s}"
+}
+
+_rb_force_install_bundler() {
+  local version="${1}"
+
+  echo "=== [rbenv4ci] Installing Bundler${version:+ ${version}}..."
+  gem install --force "bundler${version:+:${version}}" && rbenv rehash
+}
+
+_rb_ensure_bundler_version() {
+  local version="${1}"
+
+  # we cannot trust rbenv shim because it does not support rubygems' versioning
+  # so detect the version and ensure that one - if it is the rbenv shim it will
+  # fail and install the rubygems version.
+  if test "x${version}" = "xcurrent"; then
+    version="$(_rb_get_bundler_version)"
+    if test "x${version}" = "x"; then
+      # install latest bundler
+      _rb_force_install_bundler
+      return ${?}
+    fi
+  fi
+
+  if ! rb_with_bundler_do "${version}" --version 2> /dev/null >&2; then
+    _rb_force_install_bundler "${version}"
+  fi
+}
+
+_rb_bundled_with_for_gemfile() {
+  local gemfile="${1}"
+  local requested="$(_rb_bundled_with ${gemfile})"
+
+  echo "${request:-current}"
+}
+
+rb_gemfile_foreach() {
+  local gemfiles="$(_rb_find_up_first . -xtype f -name "Gemfile*" -a ! -name "*.lock")"
+  local cmd="${@}"
+
+  for gemfile in ${gemfiles}; do
+    _rb_eval ""${cmd}" "${gemfile}""
+  done
+}
+
+rb_bundle_install_for_gemfile() {
+  local gemfile="${1}"
+  local requested="${2:-"$(_rb_bundled_with_for_gemfile "${gemfile}")"}"
+
+  BUNDLE_GEMFILE="${gemfile}" rb_with_bundler_do "${requested}" install
+}
+
+_rb_ensure_bundler_and_install() {
+  local gemfile="${1}"
+  local requested="$(_rb_bundled_with_for_gemfile ${gemfile})"
+  _rb_ensure_bundler_version "${requested}"
+  echo "=== [rbenv4ci] Bundling ${gemfile} on $(ruby -v) with $(rb_with_bundler_do "${requested}" --version)"
+  rb_bundle_install_for_gemfile "${gemfile}"
+}
+
+rb_bundle_install_all_gemfiles() {
+  rb_gemfile_foreach _rb_ensure_bundler_and_install
+
+  echo "=== [rbenv4ci] Installed Bundler versions:"
+  gem list bundler | grep -P "^bundler\s+\("
+}
+
+if [[ "${BASH_SOURCE[0]}" = "${0}" ]]; then
+  set -eo pipefail
+  shopt -s failglob
+
+  rb_bundle_install_all_gemfiles
+fi

@@ -1,0 +1,150 @@
+#!/bin/bash
+
+source ~/.bash_rbenv
+
+_rb_regex_escape() {
+  echo "${1}" | sed -e 's/[]\/$*.^[]/\\&/g'
+}
+
+_rb_sort_versions() {
+  local input="${1}"
+  # latest/newer versions first
+  echo "${input}" | grep -v "^$" | sort -V -r -u
+}
+
+_rb_match_version() {
+  local input="${1}"
+  local version_esc=$(_rb_regex_escape "${2}")
+  _rb_sort_versions "$(echo "${input}" |
+    grep -P "^\s*${version_esc}" |
+    sed -e "s/[[:space:]]*\(${version_esc}\(\.[0-9]\+\)*\).*/\1/")" |
+    head -n 1
+}
+
+_rb_get_versions() {
+  local versions="$(_rb_sort_versions "${1}")"
+  if test "x${2}" != "x--include-prereleases"; then
+    versions=$(echo "${versions}" |
+      grep -v -P '\-(pre(view)?|beta|alpha|rc|dev)\d*$')
+  fi
+  echo "${versions}"
+}
+
+rb_installable_versions() {
+  _rb_get_versions "$(rbenv install -l)" "${@}"
+}
+
+rb_installed_versions() {
+  _rb_get_versions "$(rbenv versions --bare --skip-aliases)" "${@}"
+}
+
+rb_similar_installable_version() {
+  local req="${1}"
+  _rb_match_version "$(rb_installable_versions "${@:2}")" "${req}"
+}
+
+rb_similar_installed_version() {
+  local req="${1}"
+  _rb_match_version "$(rb_installed_versions "${@:2}")" "${req}"
+}
+
+rb_latest_installed_version() {
+  local req="${1}"
+  local installed
+  if test "x${req}" != "x"; then
+    installed=$(rb_similar_installed_version "${req}")
+  else
+    installed="$(rb_installed_versions | head -n 1)"
+  fi
+  if test "x${installed}" = "x"; then
+    return 1
+  fi
+  echo "${installed}"
+}
+
+rb_set_version() {
+  local req="${1}"
+  local similar=$(rb_similar_installed_version "${req}")
+  if test "x${similar}" = "x"; then
+    return 1
+  fi
+  rbenv shell "${similar}"
+}
+
+_rb_ensure_global_version() {
+  if test "x$(rbenv global)" = "xsystem"; then
+    rbenv global "$(rb_latest_installed_version "${@}")"
+  fi
+}
+
+rb_with_ruby_do()
+{
+    local ruby_version="${1}"
+    local cmd="${@:2}"
+
+    if test "x${ruby_version}" != "xcurrent"; then
+        if ! rb_set_version "${ruby_version}"; then
+            echo "=== [rbenv4ci] Failed to set Ruby ${ruby_version}" >&2
+            return 1
+        fi
+    else
+        ruby_version="$(rbenv version-name)"
+    fi
+
+    echo "=== [rbenv4ci] Running on ${ruby_version}"
+    eval "${cmd}"
+}
+
+rb_with_rubies_do()
+{
+    local rubies="${1}"
+    local cmd="${@:2}"
+    local ruby_failures
+
+    if test "x${rubies}" = "xall"; then
+        rubies="$(rbenv whence ruby)"
+    fi
+
+    for v in ${rubies}; do
+        if ! rb_with_ruby_do "${v}" "${cmd}"; then
+            ruby_failures="${ruby_failures:+${ruby_failures} }${v}"
+        fi
+    done
+
+    if test "x${ruby_failures}" != "x"; then
+        echo >&2 "=== [rbenv4ci] Failed command in ${ruby_failures}"
+        return 1
+    fi
+}
+
+rb_install_ruby() {
+  local req="${1}"
+  local version="$(rb_similar_installable_version "${req}")"
+  if test "x${version}" = "x"; then
+    echo >&2 "=== [rbenv4ci] Could not find a suitable Ruby version for ${req}"
+    return 1
+  fi
+  echo "=== [rbenv4ci] Installing ${version} (requested: ${req})"
+  CONFIGURE_OPTS="${CONFIGURE_OPTS:---disable-install-doc}" \
+      rbenv install -s "${version}" \
+      && rbenv rehash \
+      && rbenv shell "${version}" 2> /dev/null \
+      && gem update --system
+}
+
+rb_install_all_rubies() {
+  for req in "${@}"; do
+    if rb_set_version "${req}"; then
+      echo "=== [rbenv4ci] Skipping version ${req} as there is already version $(rbenv version-name) installed"
+      continue
+    fi
+    rb_install_ruby "${req}"
+  done
+}
+
+if [[ "${BASH_SOURCE[0]}" = "${0}" ]]; then
+  set -eo pipefail
+  shopt -s failglob
+
+  rb_install_all_rubies "${@}" && _rb_ensure_global_version
+fi
