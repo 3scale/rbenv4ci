@@ -12,7 +12,12 @@ rb_bundle_install_on_rubies() {
   fi
 
   for ruby_version in ${rubies}; do
-    echo "=== [rbenv4ci] Switching to ${ruby_version}"
+    if ! rb_set_version "${ruby_version}"; then
+      echo "=== [rbenv4ci] Version ${ruby_version} not found, trying installation."
+      rb_install_ruby "${ruby_version}"
+    fi
+
+    echo "=== [rbenv4ci] Switching to $(rbenv version-name)"
     rb_set_version "${ruby_version}"
     rb_bundle_install_all_gemfiles
     echo -n "=== [rbenv4ci] Bundler versions available on $(ruby -v): "
