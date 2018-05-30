@@ -1,21 +1,37 @@
 #!/bin/bash
 
 source ~/.bash_rbenv
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"/ruby_versions
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"/bundle_install_gemfiles
 
-rb_bundle_install_all_rubies() {
-  for ruby_version in $(rbenv whence ruby); do
-    echo "=== [rbenv4ci] Switching to ${ruby_version}"
-    rbenv shell "${ruby_version}"
+rb_bundle_install_on_rubies() {
+  local rubies="${@:-all}"
+
+  if test "x${rubies}" = "xall"; then
+    rubies=$(rbenv whence ruby)
+  fi
+
+  for ruby_version in ${rubies}; do
+    if ! rb_set_version "${ruby_version}"; then
+      echo "=== [rbenv4ci] Version ${ruby_version} not found, trying installation."
+      rb_install_ruby "${ruby_version}"
+    fi
+
+    echo "=== [rbenv4ci] Switching to $(rbenv version-name)"
+    rb_set_version "${ruby_version}"
     rb_bundle_install_all_gemfiles
     echo -n "=== [rbenv4ci] Bundler versions available on $(ruby -v): "
     echo "$(gem list bundler |  grep -P "^bundler\s+\(" | cut -d' ' -f2- |  sed -e 's/(\(.*\))/\1/g' -e 's/,//g' -e 's/default:\s*//g')"
   done
 }
 
+rb_bundle_install_all_rubies() {
+  rb_bundle_install_on_rubies all
+}
+
 if [[ "${BASH_SOURCE[0]}" = "${0}" ]]; then
   set -eo pipefail
   shopt -s failglob
 
-  rb_bundle_install_all_rubies
+  rb_bundle_install_on_rubies "${@}"
 fi

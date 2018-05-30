@@ -38,6 +38,10 @@ rb_installed_versions() {
   _rb_get_versions "$(rbenv versions --bare --skip-aliases)" "${@}"
 }
 
+rb_local_version() {
+  rbenv local 2> /dev/null
+}
+
 rb_similar_installable_version() {
   local req="${1}"
   _rb_match_version "$(rb_installable_versions "${@:2}")" "${req}"
@@ -62,12 +66,47 @@ rb_latest_installed_version() {
   echo "${installed}"
 }
 
-rb_set_version() {
+rb_resolve_version() {
   local req="${1}"
+
+  if test "x${req}" = "xlocal"; then
+    req="$(rb_local_version)"
+  fi
+
+  if test "x${req}" = "x"; then
+    return 1
+  fi
+
   local similar=$(rb_similar_installed_version "${req}")
   if test "x${similar}" = "x"; then
     return 1
   fi
+
+  echo "${similar}"
+}
+
+rb_resolve_versions() {
+  local versions="${@}"
+  local resolved
+
+  for v in ${versions}; do
+    local this_version="$(rb_resolve_version "${v}")"
+    if test "x${this_version}" != "x"; then
+      resolved="${resolved:+${resolved }}${this_version}"
+    fi
+  done
+
+  echo "${resolved}"
+}
+
+rb_set_version() {
+  local req="${1}"
+  local similar="$(rb_resolve_version "${req}")"
+
+  if test "x${similar}" = "x"; then
+    return 1
+  fi
+
   rbenv shell "${similar}"
 }
 
@@ -82,13 +121,9 @@ rb_with_ruby_do()
     local ruby_version="${1}"
     local cmd="${@:2}"
 
-    if test "x${ruby_version}" != "xcurrent"; then
-        if ! rb_set_version "${ruby_version}"; then
-            echo "=== [rbenv4ci] Failed to set Ruby ${ruby_version}" >&2
-            return 1
-        fi
-    else
-        ruby_version="$(rbenv version-name)"
+    if ! rb_set_version "${ruby_version}"; then
+      echo "=== [rbenv4ci] Failed to set Ruby ${ruby_version}" >&2
+      return 1
     fi
 
     echo "=== [rbenv4ci] Running on ${ruby_version}"
@@ -120,10 +155,12 @@ rb_with_rubies_do()
 rb_install_ruby() {
   local req="${1}"
   local version="$(rb_similar_installable_version "${req}")"
+
   if test "x${version}" = "x"; then
     echo >&2 "=== [rbenv4ci] Could not find a suitable Ruby version for ${req}"
     return 1
   fi
+
   echo "=== [rbenv4ci] Installing ${version} (requested: ${req})"
   CONFIGURE_OPTS="${CONFIGURE_OPTS:---disable-install-doc}" \
       rbenv install -s "${version}" \
@@ -132,13 +169,16 @@ rb_install_ruby() {
       && gem update --system
 }
 
-rb_install_all_rubies() {
+rb_install_rubies() {
   for req in "${@}"; do
     if rb_set_version "${req}"; then
       echo "=== [rbenv4ci] Skipping version ${req} as there is already version $(rbenv version-name) installed"
       continue
     fi
-    rb_install_ruby "${req}"
+    if ! rb_install_ruby "${req}"; then
+        echo >&2 "Failed to install ${req}"
+        return 1
+    fi
   done
 }
 
@@ -146,5 +186,5 @@ if [[ "${BASH_SOURCE[0]}" = "${0}" ]]; then
   set -eo pipefail
   shopt -s failglob
 
-  rb_install_all_rubies "${@}" && _rb_ensure_global_version
+  rb_install_rubies "${@}" && _rb_ensure_global_version
 fi
