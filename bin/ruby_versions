@@ -90,7 +90,7 @@ rb_resolve_versions() {
   local resolved
 
   for v in ${versions}; do
-    local this_version="$(_rb_resolve_version "${v}")"
+    local this_version="$(rb_resolve_version "${v}")"
     if test "x${this_version}" != "x"; then
       resolved="${resolved:+${resolved }}${this_version}"
     fi
@@ -101,7 +101,7 @@ rb_resolve_versions() {
 
 rb_set_version() {
   local req="${1}"
-  local similar="$(_rb_resolve_version "${req}")"
+  local similar="$(rb_resolve_version "${req}")"
 
   if test "x${similar}" = "x"; then
     return 1
@@ -175,15 +175,16 @@ rb_install_rubies() {
       echo "=== [rbenv4ci] Skipping version ${req} as there is already version $(rbenv version-name) installed"
       continue
     fi
-    rb_install_ruby "${req}"
+    if ! rb_install_ruby "${req}"; then
+        echo >&2 "Failed to install ${req}"
+        return 1
+    fi
   done
-
-  return 1
 }
 
 if [[ "${BASH_SOURCE[0]}" = "${0}" ]]; then
   set -eo pipefail
   shopt -s failglob
 
-  rb_install_all_rubies "${@}" && _rb_ensure_global_version
+  rb_install_rubies "${@}" && _rb_ensure_global_version
 fi
