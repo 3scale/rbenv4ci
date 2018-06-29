@@ -1,6 +1,6 @@
 # rbenv4ci
 
-Scripts to help automate Ruby CI using rbenv.
+Scripts to help automate Ruby CI using [rbenv](https://github.com/rbenv/rbenv).
 
 ## License
 
